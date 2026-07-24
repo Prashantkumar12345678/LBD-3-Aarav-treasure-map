@@ -1,0 +1,210 @@
+/* =============================================================================
+   Aarav and the Treasure Map — styles (no external dependencies)
+============================================================================= */
+@font-face {
+  font-family: 'Lilita One';
+  src: url('assets/fonts/LilitaOne-Regular.ttf') format('truetype');
+  font-display: swap;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #0b1622; }
+body { font-family: 'Lilita One', 'Trebuchet MS', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+button { font-family: inherit; }
+
+#app { position: fixed; inset: 0; }
+
+/* ---------- Level-select menu ---------- */
+#menu {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 34px; padding: 24px;
+  background:
+    radial-gradient(120% 90% at 50% 0%, #1d4e6e 0%, #0e2b40 55%, #071a29 100%);
+  color: #fff; text-align: center;
+}
+#menu h1 {
+  font-size: clamp(32px, 6vw, 68px); letter-spacing: 1px;
+  color: #ffd970; text-shadow: 0 4px 0 #a9791b, 0 8px 22px rgba(0,0,0,.5);
+}
+#menu .subtitle { font-size: clamp(14px, 2vw, 20px); color: #bfe0f2; margin-top: -18px; opacity: .9; }
+.cards { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; max-width: 1100px; }
+.card {
+  width: 300px; max-width: 82vw; cursor: pointer; border: none; color: #fff;
+  border-radius: 22px; overflow: hidden; background: #12314a;
+  box-shadow: 0 10px 0 rgba(0,0,0,.35), 0 18px 40px rgba(0,0,0,.45);
+  transition: transform .18s ease, box-shadow .18s ease; text-align: left;
+}
+.card:hover { transform: translateY(-8px) scale(1.02); box-shadow: 0 16px 0 rgba(0,0,0,.35), 0 26px 60px rgba(0,0,0,.55); }
+.card:active { transform: translateY(-2px) scale(.99); }
+.card .thumb { height: 168px; background-size: cover; background-position: center; }
+.card .body { padding: 16px 18px 20px; }
+.card .lvl { font-size: 15px; color: #7fd0ff; letter-spacing: 2px; }
+.card .name { font-size: 23px; margin-top: 4px; color: #ffe08a; }
+.card .desc { font-size: 14px; margin-top: 8px; color: #cfe3f0; line-height: 1.35; opacity: .85; }
+
+/* ---------- Game root & scaled stage ---------- */
+#game-root { position: absolute; inset: 0; }
+.level { position: absolute; inset: 0; overflow: hidden; }
+.bg { position: absolute; inset: -40px; background-size: cover; background-position: center; z-index: 0;
+  filter: blur(14px); }   /* blurred backdrop behind the parchment (inset extends past edges so blur doesn't fade in) */
+.stage {
+  position: absolute; left: 50%; top: 50%;
+  transform-origin: center center; transform: translate(-50%, -50%);
+  z-index: 1;
+}
+
+/* ---------- Play field / grid ---------- */
+.base-map { position: absolute; background-size: 100% 100%; background-repeat: no-repeat; z-index: 1; }
+.play-field { position: absolute; z-index: 2; }
+.particles { position: absolute; z-index: 6; pointer-events: none; }
+.grid-lines { position: absolute; inset: 0; pointer-events: none; }
+.gl { position: absolute; background: rgba(25,35,50,.5); }
+.gl-v { top: 0; width: 2px; height: 100%; transform: translateX(-1px); }
+.gl-h { left: 0; height: 2px; width: 100%; transform: translateY(-1px); }
+
+/* ---------- Sprites ---------- */
+.sprite {
+  position: absolute; left: 50%; top: 50%;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  will-change: transform;
+}
+.character { width: 140px; height: 140px; z-index: 5; filter: drop-shadow(0 6px 10px rgba(0,0,0,.35)); }
+/* Soft glow behind the character while the idle hint is showing. */
+.char-glow { width: 160px; height: 160px; z-index: 4; pointer-events: none; animation: charglow 1.1s ease-in-out infinite;
+  background: radial-gradient(circle, rgba(180,255,120,.85) 0%, rgba(150,240,90,.4) 42%, rgba(150,240,90,0) 70%); }
+@keyframes charglow { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+.item { width: 130px; height: 130px; z-index: 4; }
+/* Glow is the Glow.webp halo, centred on the item and sitting behind it. */
+.item .glow-child { display: none; }   /* radial patch removed — glow now comes from the drop-shadow below */
+/* Golden glow around the item's silhouette while highlighted (sits behind/around it, never on top). */
+.item.glowing { filter: drop-shadow(0 0 10px rgba(255,235,140,.95)) drop-shadow(0 0 18px rgba(255,205,90,.8)); }
+.aerrow { width: 62px; height: 82px; z-index: 6; filter: drop-shadow(0 3px 5px rgba(0,0,0,.4)); animation: hintbob .9s ease-in-out infinite; }
+@keyframes hintbob { 0%,100% { margin-top: 0; opacity: .8; } 50% { margin-top: -14px; opacity: 1; } }
+/* Idle hint = Arrow direction.svg (5 chevrons) lighting up one-by-one (marching). */
+.hint-arrow { width: 40px; height: 168px; z-index: 7; filter: drop-shadow(0 2px 3px rgba(0,0,0,.4)); }
+.hint-arrow svg { width: 100%; height: 100%; display: block; }
+.hint-arrow svg path { animation: chevpulse 1.7s ease-in-out infinite; }
+.hint-arrow svg path:nth-of-type(1) { animation-delay: 0s;   }  /* bottom, nearest ship, lights first */
+.hint-arrow svg path:nth-of-type(2) { animation-delay: .2s;  }
+.hint-arrow svg path:nth-of-type(3) { animation-delay: .4s;  }
+.hint-arrow svg path:nth-of-type(4) { animation-delay: .6s;  }
+.hint-arrow svg path:nth-of-type(5) { animation-delay: .8s;  }  /* tip, lights last */
+@keyframes chevpulse { 0%,100% { opacity: .18; } 40% { opacity: 1; } }
+.island { width: 170px; height: 150px; z-index: 3; filter: drop-shadow(0 6px 10px rgba(0,0,0,.3)); }
+.obstacle { width: 118px; height: 118px; z-index: 3; }
+
+/* ---------- Chat box ---------- */
+.chat-box {
+  position: absolute; z-index: 26; background-size: 100% 100%; background-repeat: no-repeat;
+  display: flex; align-items: center;              /* vertical centre */
+  user-select: none; -webkit-user-select: none;
+}
+.chat-text {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: flex-start;  /* middle vertically, left horizontally */
+  text-align: left;                                 /* read left -> right */
+  padding: 0 110px 40px 170px;                       /* left 170 = text start; 40px bottom = text sits 20px higher */
+  font-size: 40px; line-height: 1; color: #4a2a12; letter-spacing: .3px;
+  text-shadow: 0 1px 0 rgba(255,255,255,.35);
+}
+.chat-text::selection { background: transparent; }
+
+/* ---------- Compass + D-pad ---------- */
+.compass-bg { position: absolute; z-index: 4; background-size: contain; background-repeat: no-repeat; background-position: center; }
+.dbtn {
+  position: absolute; z-index: 9; border: none; cursor: pointer; background: transparent;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  transition: transform .08s ease; -webkit-tap-highlight-color: transparent;
+}
+.dbtn:hover { transform: scale(1.05); }
+.dbtn:active { transform: scale(.9); }
+.buttons-off .dbtn { pointer-events: none; filter: grayscale(.95) brightness(.8) opacity(.5); }
+
+/* ---------- Feedback / hints ---------- */
+/* Wrong-move: red tint over the cell the character landed on (~one grid cell). */
+.cell-wrong {
+  position: absolute; left: 50%; top: 50%; width: 150px; height: 150px;
+  background: rgba(255,60,60,.40);
+  box-shadow: inset 0 0 0 3px rgba(220,40,40,.8), 0 0 24px 4px rgba(255,50,50,.6);
+  z-index: 3; pointer-events: none; animation: wrongglow .7s ease-in-out infinite;
+}
+@keyframes wrongglow { 0%,100% { box-shadow: inset 0 0 0 3px rgba(220,40,40,.8), 0 0 16px 2px rgba(255,50,50,.45); } 50% { box-shadow: inset 0 0 0 3px rgba(220,40,40,.9), 0 0 30px 6px rgba(255,50,50,.75); } }
+/* Try Again = full-screen dim (blackish blur) + centred wooden sign */
+.try-again-overlay { z-index: 28; }
+.try-dim { position: absolute; inset: 0; background: rgba(6,14,26,.55); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.try-again-sign {
+  position: absolute; left: 50%; top: 46%; width: 880px; height: 560px;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  transform: translate(-50%, -50%); animation: signpop .4s cubic-bezier(.2,1.5,.5,1);
+  filter: drop-shadow(0 12px 26px rgba(0,0,0,.5));
+}
+@keyframes signpop { from { transform: translate(-50%, -50%) scale(.5); } to { transform: translate(-50%, -50%) scale(1); } }
+
+/* ---------- Collection "zoom" presentation (Gem found! screen) ---------- */
+.collect-overlay { position: absolute; inset: 0; z-index: 27; overflow: hidden; }  /* above chat banner (26) so rays cover the banner */
+.collect-dim { position: absolute; inset: 0; background: rgba(10,22,38,.55); }
+/* Real victory sunburst texture (Sun_Shines_01), tinted to the item colour via mask. */
+.collect-rays {
+  position: absolute; left: 50%; top: 50%; width: 2000px; height: 2000px;
+  transform: translate(-50%, -50%);
+  background: var(--ray, #ffd34d);
+  -webkit-mask: url("assets/images/common/rays.webp") center / contain no-repeat;
+          mask: url("assets/images/common/rays.webp") center / contain no-repeat;
+  opacity: .95; animation: rayspin 26s linear infinite;
+}
+@keyframes rayspin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+.collect-glow {
+  position: absolute; inset: 0;                       /* full-screen blur.webp */
+  background-size: 100% 100%; background-repeat: no-repeat; background-position: center;
+  opacity: .9; pointer-events: none;
+}
+.collect-spark { position: absolute; inset: 0; pointer-events: none; }
+.collect-spark .spk {
+  position: absolute; background-size: contain; background-repeat: no-repeat; background-position: center;
+  animation: twinkle 1.3s ease-in-out infinite;
+}
+@keyframes twinkle { 0%,100% { transform: scale(.4); opacity: .25; } 50% { transform: scale(1); opacity: 1; } }
+.collect-item {
+  position: absolute; left: 50%; top: 50%; width: 760px; height: 760px;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  filter: drop-shadow(0 10px 30px rgba(0,0,0,.45));
+}
+/* Treasure chest sitting on the island in the LBD3 collect screen */
+.collect-item-fg { position: absolute; left: 50%; top: 50%; width: 34%; height: 34%;
+  transform: translate(-50%, -50%); background-size: contain; background-repeat: no-repeat; background-position: center; }
+.hand-hint { position: absolute; z-index: 13; width: 175px; height: 175px; transform: translate(-50%, 0); pointer-events: none;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  animation: handbob 1.1s ease-in-out infinite; }
+@keyframes handbob { 0%,100% { margin-top: 0; } 50% { margin-top: 14px; } }
+
+/* ---------- Tutorial guide screen ---------- */
+.guide-screen { z-index: 25; background-size: cover; background-position: center; }
+.guide-hl {
+  position: absolute; background-size: contain; background-repeat: no-repeat; background-position: center;
+  pointer-events: none; animation: hlpop .3s ease-out;
+}
+@keyframes hlpop { from { transform: scale(.7); } to { transform: scale(1); } }
+
+/* ---------- Overlays: splash + final ---------- */
+.overlay { position: absolute; inset: 0; z-index: 30; background-size: cover; background-position: center; }
+.splash .go-btn {
+  position: absolute; left: 1448px; top: 754px; width: 472px; height: 325px;
+  border: none; cursor: pointer; background: transparent;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  color: #fff; font-size: 48px;
+}
+.final-screen { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 60px; }
+.win-banner { position: absolute; background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 3; }
+.collage-item { position: absolute; background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 2;
+  filter: drop-shadow(0 6px 14px rgba(0,0,0,.28)); }
+.final-layer { position: absolute; background-size: contain; background-repeat: no-repeat; background-position: bottom center; z-index: 3;
+  filter: drop-shadow(0 8px 16px rgba(0,0,0,.3)); transform-origin: bottom center; }
+.final-btns { display: flex; gap: 26px; z-index: 4; }
+.pill-btn {
+  border: none; cursor: pointer; font-size: 30px; color: #35240c;
+  padding: 18px 46px; border-radius: 40px; background: linear-gradient(#ffe07a, #ffbf3c);
+  box-shadow: 0 7px 0 #b07d18, 0 12px 24px rgba(0,0,0,.4); transition: transform .12s ease;
+}
+.pill-btn:hover { transform: translateY(-3px); }
+.pill-btn:active { transform: translateY(2px); box-shadow: 0 3px 0 #b07d18; }
