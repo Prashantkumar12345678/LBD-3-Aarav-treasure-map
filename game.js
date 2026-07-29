@@ -115,14 +115,15 @@ class Sequence {
 /* ---- element transform helpers (compose translate + scale + rotate) -------- */
 function initTransform(el) {
   if (el._tf) return el._tf;
-  el._tf = { x: 0, y: 0, scale: 1, rot: 0, baseCenter: true };
+  el._tf = { x: 0, y: 0, scale: 1, rot: 0, baseCenter: true, flipX: false };
   return el._tf;
 }
 function applyTransform(el) {
   const tf = initTransform(el);
   // Unity Y is up; CSS Y is down -> negate y. Elements are centered at their cell.
   const centre = tf.baseCenter ? 'translate(-50%, -50%) ' : '';
-  el.style.transform = `${centre}translate(${tf.x}px, ${-tf.y}px) rotate(${tf.rot}deg) scale(${tf.scale})`;
+  const sx = tf.flipX ? -tf.scale : tf.scale;   // flipX mirrors horizontally (e.g. ship facing right)
+  el.style.transform = `${centre}translate(${tf.x}px, ${-tf.y}px) rotate(${tf.rot}deg) scale(${sx}, ${tf.scale})`;
 }
 
 // Move a positioned element to field-space (x,y) with y-up, easing over dur.
@@ -741,6 +742,8 @@ class ShipController {
       this._triggerMistake();                // "Wrong direction" text+VO -> "Try again" VO + wooden sign -> "Tap the buttons"
       return;
     }
+    this.incorrectCount = 0;                  // a correct move breaks the consecutive-wrong streak
+    this.ctx.showCharGlow(false);
     this.currentCol = nextCol; this.currentRow = nextRow;
     const targetPos = this.grid.getCellPosition(this.currentCol, this.currentRow);
     this.isWinMove = (this.currentCol === this.absoluteTarget.x && this.currentRow === this.absoluteTarget.y);
@@ -767,11 +770,9 @@ class ShipController {
         if (c.idleEl) c.idleEl.style.display = 'none';
         this._dirArrowsHide();
         this.isMoving = false;
-        if (this.incorrectCount >= 2) {                       // arrows hint on 2nd+ wrong
-          this._hintOn = true;
+        if (this.incorrectCount >= 2) {                       // arrows only after 2 consecutive wrong moves
           this.ctx.showCharGlow(true);
-          this.updateHint();                                  // chevron on every valid direction
-          this.showArrowTemporarily();
+          this.updateHint();                                  // chevron in the correct (goal-ward) direction(s)
         }
         this.chat.playChat(1, false);                         // "Tap the buttons to move the ship." (always stays on screen)
       },
@@ -821,7 +822,10 @@ class ShipController {
     return out;
   }
   updateHint() {
-    const valid = this.getValidMoveDirs();   // show arrows on ALL open directions
+    // Show arrows ONLY in the correct direction(s) that lead toward the goal.
+    // If two directions both make progress, show both; else fall back to any open move.
+    let valid = this.getProgressDirs();
+    if (valid.length === 0) valid = this.getValidMoveDirs();
     const D = 105;
     const rot = { up: 0, down: 180, left: -90, right: 90 };
     const off = { up: {x:0,y:D}, down: {x:0,y:-D}, left: {x:-D,y:0}, right: {x:D,y:0} };
@@ -1304,6 +1308,7 @@ class Level {
     this.charGlowEl = E.makeSprite(field, null, 'char-glow');   // CSS radial glow (Glow.webp is actually binoculars art)
     this.charGlowEl.style.display = 'none';
     this.characterEl = E.makeSprite(field, cfg.img.character, 'character');
+    if (cfg.type === 'ship') { E.initTransform(this.characterEl).flipX = true; E.applyTransform(this.characterEl); }  // ship faces right
 
     // ----- idle hint arrow: the provided "Arrow direction.svg" (5 chevrons),
     //        inlined so each chevron can light up one-by-one (marching). -----
@@ -1328,15 +1333,8 @@ class Level {
     E.initTransform(this.incorrectEl);
     this.incorrectEl.style.display = 'none';
 
-    // Try Again = full-screen overlay: blackish blur dim + centred wooden sign
-    this.tryAgainEl = document.createElement('div');
-    this.tryAgainEl.className = 'overlay try-again-overlay';
-    const tryDim = document.createElement('div'); tryDim.className = 'try-dim'; this.tryAgainEl.appendChild(tryDim);
-    const trySign = document.createElement('div'); trySign.className = 'try-again-sign';
-    trySign.style.backgroundImage = `url("assets/images/common/${encodeURIComponent('try-again.webp')}")`;
-    this.tryAgainEl.appendChild(trySign);
-    stage.appendChild(this.tryAgainEl);
-    this.tryAgainEl.style.display = 'none';
+    // Try Again prompt screen removed per design — no wooden sign / dim overlay.
+    this.tryAgainEl = null;
 
     this.handEl = document.createElement('div');
     this.handEl.className = 'hand-hint';
@@ -1344,16 +1342,8 @@ class Level {
     stage.appendChild(this.handEl);
     this.handEl.style.display = 'none';
 
-    // ShipController "aerrow": separate fixed wooden arrow above the island.
+    // ShipController "aerrow": wooden arrow above the island — removed per design (no goal marker).
     this.arrowEl = null;
-    if (cfg.type === 'ship' && cfg.img.aerrow) {
-      const ae = E.makeSprite(field, cfg.img.aerrow, 'aerrow');
-      const isl = this.grid.getCellPosition(Math.floor(cfg.grid.cols / 2) + cfg.targetOffset.x,
-                                             Math.floor(cfg.grid.rows / 2) + cfg.targetOffset.y);
-      const t = E.initTransform(ae); t.x = isl.x; t.y = isl.y + 26; E.applyTransform(ae); // just above the treasure chest, inside the field (not on the banner)
-      ae.style.display = 'none';
-      this.arrowEl = ae;
-    }
 
     // ----- chat box -----
     const chatWrap = document.createElement('div');
