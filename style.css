@@ -14,35 +14,6 @@ button { font-family: inherit; }
 
 #app { position: fixed; inset: 0; }
 
-/* ---------- Level-select menu ---------- */
-#menu {
-  position: absolute; inset: 0;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 34px; padding: 24px;
-  background:
-    radial-gradient(120% 90% at 50% 0%, #1d4e6e 0%, #0e2b40 55%, #071a29 100%);
-  color: #fff; text-align: center;
-}
-#menu h1 {
-  font-size: clamp(32px, 6vw, 68px); letter-spacing: 1px;
-  color: #ffd970; text-shadow: 0 4px 0 #a9791b, 0 8px 22px rgba(0,0,0,.5);
-}
-#menu .subtitle { font-size: clamp(14px, 2vw, 20px); color: #bfe0f2; margin-top: -18px; opacity: .9; }
-.cards { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; max-width: 1100px; }
-.card {
-  width: 300px; max-width: 82vw; cursor: pointer; border: none; color: #fff;
-  border-radius: 22px; overflow: hidden; background: #12314a;
-  box-shadow: 0 10px 0 rgba(0,0,0,.35), 0 18px 40px rgba(0,0,0,.45);
-  transition: transform .18s ease, box-shadow .18s ease; text-align: left;
-}
-.card:hover { transform: translateY(-8px) scale(1.02); box-shadow: 0 16px 0 rgba(0,0,0,.35), 0 26px 60px rgba(0,0,0,.55); }
-.card:active { transform: translateY(-2px) scale(.99); }
-.card .thumb { height: 168px; background-size: cover; background-position: center; }
-.card .body { padding: 16px 18px 20px; }
-.card .lvl { font-size: 15px; color: #7fd0ff; letter-spacing: 2px; }
-.card .name { font-size: 23px; margin-top: 4px; color: #ffe08a; }
-.card .desc { font-size: 14px; margin-top: 8px; color: #cfe3f0; line-height: 1.35; opacity: .85; }
-
 /* ---------- Game root & scaled stage ---------- */
 #game-root { position: absolute; inset: 0; }
 .level { position: absolute; inset: 0; overflow: hidden; }
@@ -79,8 +50,6 @@ button { font-family: inherit; }
 .item .glow-child { display: none; }   /* radial patch removed — glow now comes from the drop-shadow below */
 /* Golden glow around the item's silhouette while highlighted (sits behind/around it, never on top). */
 .item.glowing { filter: drop-shadow(0 0 10px rgba(255,235,140,.95)) drop-shadow(0 0 18px rgba(255,205,90,.8)); }
-.aerrow { width: 62px; height: 82px; z-index: 6; filter: drop-shadow(0 3px 5px rgba(0,0,0,.4)); animation: hintbob .9s ease-in-out infinite; }
-@keyframes hintbob { 0%,100% { margin-top: 0; opacity: .8; } 50% { margin-top: -14px; opacity: 1; } }
 /* Idle hint = Arrow direction.svg (5 chevrons) lighting up one-by-one (marching). */
 .hint-arrow { width: 40px; height: 168px; z-index: 7; filter: drop-shadow(0 2px 3px rgba(0,0,0,.4)); }
 .hint-arrow svg { width: 100%; height: 100%; display: block; }
@@ -130,17 +99,6 @@ button { font-family: inherit; }
   z-index: 3; pointer-events: none; animation: wrongglow .7s ease-in-out infinite;
 }
 @keyframes wrongglow { 0%,100% { box-shadow: inset 0 0 0 3px rgba(220,40,40,.8), 0 0 16px 2px rgba(255,50,50,.45); } 50% { box-shadow: inset 0 0 0 3px rgba(220,40,40,.9), 0 0 30px 6px rgba(255,50,50,.75); } }
-/* Try Again = full-screen dim (blackish blur) + centred wooden sign */
-.try-again-overlay { z-index: 28; }
-.try-dim { position: absolute; inset: 0; background: rgba(6,14,26,.55); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
-.try-again-sign {
-  position: absolute; left: 50%; top: 46%; width: 880px; height: 560px;
-  background-size: contain; background-repeat: no-repeat; background-position: center;
-  transform: translate(-50%, -50%); animation: signpop .4s cubic-bezier(.2,1.5,.5,1);
-  filter: drop-shadow(0 12px 26px rgba(0,0,0,.5));
-}
-@keyframes signpop { from { transform: translate(-50%, -50%) scale(.5); } to { transform: translate(-50%, -50%) scale(1); } }
-
 /* ---------- Collection "zoom" presentation (Gem found! screen) ---------- */
 .collect-overlay { position: absolute; inset: 0; z-index: 27; overflow: hidden; }  /* above chat banner (26) so rays cover the banner */
 .collect-dim { position: absolute; inset: 0; background: rgba(10,22,38,.55); }
@@ -188,11 +146,34 @@ button { font-family: inherit; }
 
 /* ---------- Overlays: splash + final ---------- */
 .overlay { position: absolute; inset: 0; z-index: 30; background-size: cover; background-position: center; }
+/* Themed opaque backdrop (background-COLOR shows through while the large splash
+   art is still downloading on a slow connection; the art covers it once loaded). */
+.splash { background-color: #0e2b40; }
 .splash .go-btn {
   position: absolute; left: 1448px; top: 754px; width: 472px; height: 325px;
   border: none; cursor: pointer; background: transparent;
   background-size: contain; background-repeat: no-repeat; background-position: center;
   color: #fff; font-size: 48px;
+}
+/* Themed loading bar shown in the start button's place until assets finish. */
+.splash .load-wrap {
+  position: absolute; left: 1454px; top: 866px; width: 460px;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+}
+.splash .load-track {
+  width: 100%; height: 34px; border-radius: 20px;
+  background: rgba(41, 24, 9, .55);
+  box-shadow: inset 0 3px 8px rgba(0,0,0,.55), 0 2px 0 rgba(255,255,255,.15);
+  border: 3px solid #6b4321; overflow: hidden;
+}
+.splash .load-fill {
+  width: 0%; height: 100%; border-radius: 16px;
+  background: linear-gradient(#ffe07a, #ffb63c 60%, #f39a1e);
+  box-shadow: 0 0 14px rgba(255,196,60,.7); transition: width .18s ease-out;
+}
+.splash .load-pct {
+  font-size: 30px; color: #ffe9b0; letter-spacing: .5px;
+  text-shadow: 0 2px 0 #7a4a15, 0 4px 10px rgba(0,0,0,.5);
 }
 .final-screen { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 60px; }
 .win-banner { position: absolute; background-size: contain; background-repeat: no-repeat; background-position: center; z-index: 3; }

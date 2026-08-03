@@ -185,19 +185,20 @@ class AudioManager {
   constructor() {
     this.isMuted = false;
     this.bg = new Audio();          this.bg.loop = true;   this.bg.volume = 0.2;   // background music only (further reduced)
-    this.title = new Audio();       this.title.loop = false;
+    this.bg.preload = 'none';       // preloader feeds it a blob later — avoid a double download
+    this.title = new Audio();       this.title.loop = false;   this.title.preload = 'none';
     this.sfx = { click: null, win: null, loss: null };
     this._titlePlayed = false;
   }
   setClips(clips) {
-    if (clips.bg)   this.bg.src = clips.bg;
+    if (clips.bg)   this._bgSrc = clips.bg;     // resolved to a blob: URL lazily at play time
     if (clips.win)  this.sfx.win = clips.win;
     if (clips.loss) this.sfx.loss = clips.loss;
     if (clips.click)this.sfx.click = clips.click;
   }
-  playBackgroundMusic() { if (this.bg.src) { this.bg.muted = this.isMuted; this.bg.play().catch(()=>{}); } }
+  playBackgroundMusic() { if (this._bgSrc) { setMediaSrc(this.bg, this._bgSrc); this.bg.muted = this.isMuted; this.bg.play().catch(()=>{}); } }
   stopBackgroundMusic() { this.bg.pause(); }
-  _oneShot(src) { if (!src) return; const a = new Audio(src); a.muted = this.isMuted; a.play().catch(()=>{}); }
+  _oneShot(src) { if (!src) return; const a = new Audio(); setMediaSrc(a, src); a.muted = this.isMuted; a.play().catch(()=>{}); }
   playButtonClick() { this._oneShot(this.sfx.click); }
   playWinSound()    { this._oneShot(this.sfx.win); }
   playLossSound()   { this._oneShot(this.sfx.loss); }   // == collect sound
@@ -225,7 +226,7 @@ class ChatManager {
     this.repository = {};       // index -> { text, audio }
     this.typingSpeed = 0.045;   // seconds per character
     this.sequenceMode = ChatSequenceMode.Interrupt;
-    this.voice = new Audio();
+    this.voice = new Audio(); this.voice.preload = 'none';   // fed blob: URLs by the preloader
     this._queue = [];
     this._busy = false;
     this._typingTween = null;
@@ -286,7 +287,7 @@ class ChatManager {
     // Voice
     if (item.audio) {
       this.voice.pause();
-      this.voice.src = item.audio;
+      setMediaSrc(this.voice, item.audio);
       this.voice.muted = this.audioMgr ? this.audioMgr.isMuted : false;
       this.voice.play().catch(()=>{});
     }
@@ -983,11 +984,99 @@ function chain(steps) {
   next();
 }
 
+/* =============================================================================
+   ASSET PRELOADER  (byte-accurate loading bar; audio served from blob: URLs)
+   - Streams every asset with a Reader so progress is real bytes, not file count.
+   - Weights each file by its true on-disk size (window.ASSET_MANIFEST), refined
+     by Content-Length. Bar is monotonic. Concurrency-limited, smallest-first.
+   - Failure-safe: any failed / stalled / aborted fetch (or file:// where fetch
+     is blocked) still counts as fully "done" so the bar can never stall.
+   Browser support for the Ogg/Opus + WebP assets: Chrome/Edge/Firefox + Safari 15+.
+============================================================================= */
+window.__ASSET_BLOBS = window.__ASSET_BLOBS || {};
+// Resolve an asset URL to its local blob: URL once preloaded (else the original).
+function assetSrc(url) { return (url && window.__ASSET_BLOBS[url]) || url; }
+// Point a media element at an asset, arming a one-time revert-to-original fallback
+// if the blob URL ever fails to decode (task: blob elements need an error path).
+function setMediaSrc(el, rawUrl) {
+  if (!el || !rawUrl) return;
+  const resolved = assetSrc(rawUrl);
+  if (resolved !== rawUrl && !el._blobFallbackArmed) {
+    el._blobFallbackArmed = true;
+    el.addEventListener('error', () => {
+      if ((el.src || '').startsWith('blob:')) {           // blob went bad -> original file, resume
+        el.src = rawUrl;
+        const p = el.play && el.play(); if (p && p.catch) p.catch(() => {});
+      }
+    });
+  }
+  el.src = resolved;
+}
+
+class Preloader {
+  constructor(manifest) {
+    this.items = (manifest || []).slice().sort((a, b) => (a.bytes || 1) - (b.bytes || 1)); // smallest-first
+    this.totalBytes = this.items.reduce((s, i) => s + (i.bytes || 1), 0) || 1;
+    this.loaded = 0;
+    this._monoPct = 0;          // enforce a monotonic bar
+    this.concurrency = 5;
+    this.perFileTimeoutMs = 20000;
+    this._cb = null;
+  }
+  onProgress(cb) { this._cb = cb; return this; }
+  _emit() {
+    let pct = Math.min(100, Math.floor((this.loaded / this.totalBytes) * 100));
+    if (pct < this._monoPct) pct = this._monoPct; else this._monoPct = pct;
+    if (this._cb) this._cb(pct);
+  }
+  async _fetchOne(item) {
+    const declared = item.bytes || 1;
+    let counted = 0;
+    const bump = (n) => { counted += n; this.loaded += n; this._emit(); };
+    let ctrl = null, timer = null;
+    try {
+      ctrl = new AbortController();
+      timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, this.perFileTimeoutMs);
+      const res = await fetch(item.url, { signal: ctrl.signal, cache: 'force-cache' });
+      if (!res.ok) throw new Error('status ' + res.status);
+      const cl = parseInt(res.headers.get('Content-Length') || '0', 10);
+      const realTotal = cl > 0 ? cl : declared;
+      if (res.body && res.body.getReader) {
+        const reader = res.body.getReader();
+        const chunks = [];
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          bump((value.length / realTotal) * declared);   // progress weighted by size table
+        }
+        window.__ASSET_BLOBS[item.url] = URL.createObjectURL(new Blob(chunks));
+      } else {                                            // no streaming support: still cache-warm
+        const blob = await res.blob();
+        window.__ASSET_BLOBS[item.url] = URL.createObjectURL(blob);
+      }
+    } catch (e) {
+      /* failure-safe: swallow — the element keeps its original src */
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (counted < declared) bump(declared - counted);   // always finalize to full weight
+    }
+  }
+  async run() {
+    const q = this.items.slice();                          // already smallest-first
+    const worker = async () => { while (q.length) await this._fetchOne(q.shift()); };
+    const n = Math.max(1, Math.min(this.concurrency, q.length || 1));
+    await Promise.all(Array.from({ length: n }, worker));
+    this._monoPct = 100; if (this._cb) this._cb(100);
+  }
+}
+
 /* expose engine to Level module (next section) */
 window.__ENGINE__ = {
   Ease, Tween, Sequence, delayedCall, doMove, doScale, doRotate, doFade, doShake, killTweensOn,
   Grid, AudioManager, ChatManager, ItemManager, PlayerController, ShipController, Particles,
   TutorialManager, makeSprite, placeAt, initTransform, applyTransform, now,
+  Preloader, assetSrc, setMediaSrc,
 };
 
 })();
@@ -1010,76 +1099,6 @@ const AUD = (lvl, name) => `assets/audio/${lvl}/${encodeURIComponent(name)}`;
 const COMMON = (name) => `assets/images/common/${encodeURIComponent(name)}`;
 
 /* ---- reconstructed chat repositories (index -> {text, audio}) ------------- */
-function repoLBD1() {
-  const a = n => AUD('lbd1', n);
-  return {
-    0:{text:"Let us collect the objects.",              audio:a("Let us collect the objects.ogg")},
-    1:{text:"Use these arrow keys to find the treasure.",audio:a("Use these arrow keys to find the treasure.ogg")},
-    6:{text:"Let us collect the first object.",          audio:a("Let us collect the first object.ogg")},
-    7:{text:"Let us collect another object.",            audio:a("Let us collect another object.ogg")},
-    8:{text:"Let us collect the last object.",           audio:a("let us collect the last object.ogg")},
-    9:{text:"Tap up to collect the first object.",       audio:a("Tap up to collect first object.ogg")},
-    10:{text:"Tap right to collect the object.",         audio:a("Tap right to collect the object.ogg")},
-    11:{text:"Tap down to collect another object.",      audio:a("Tap down to collect another object.ogg")},
-    12:{text:"Tap left to collect the last object.",     audio:a("tap left to collect the last object.ogg")},
-    13:{text:"This is up.",   audio:a("This is up.ogg")},
-    14:{text:"This is right.",audio:a("This is right.ogg")},
-    15:{text:"This is down.", audio:a("This is down.ogg")},
-    16:{text:"This is left.", audio:a("This is left.ogg")},
-    17:{text:"Tap up.",   audio:a("TAP UP.ogg")},
-    18:{text:"Tap right.",audio:a("Tap right.ogg")},
-    19:{text:"Tap down.", audio:a("Tap down.ogg")},
-    20:{text:"Tap left.", audio:a("tap left.ogg")},
-    21:{text:"One more step. Tap up.",             audio:a("One more step Tap up.ogg")},
-    22:{text:"Two more steps to go. Tap right.",   audio:a("Two more steps to go Tap right .ogg")},
-    23:{text:"Great! One more step. Tap right.",   audio:a("Great One more step Tap right.ogg")},
-    24:{text:"One more step. Tap down.",           audio:a("One more step Tap down.ogg")},
-    25:{text:"Two more steps to go. Tap left again.",audio:a("Two more steps to go Tap left again.ogg")},
-    26:{text:"One more step. Tap left.",           audio:a("One more step Tap left.ogg")},
-    27:{text:"Yay! Object collected.",            audio:a("Yay Object collected.ogg")},
-    28:{text:"That is not up.",   audio:a("that is not up.ogg")},
-    29:{text:"That is not right.",audio:a("that is not right.ogg")},
-    30:{text:"That is not down.", audio:a("that is not down.ogg")},
-    31:{text:"That is not left.", audio:a("that is not left.ogg")},
-    32:{text:"Oops! Try again.",  audio:a("Oops Try again.ogg")},
-    40:{text:"Hurry ! We did it.",audio:a("Hooray We did it.ogg")},
-  };
-}
-function repoLBD2() {
-  const a = n => AUD('lbd2', n);
-  return {
-    0:{text:"Let us find the gems.", audio:a("let us find the gems.ogg")},
-    1:{text:"Use these four direction buttons to find the treasure.", audio:a("Use_these_four_direction_buttons_to_find_the_treasure.ogg")},
-    6:{text:"Let us find the first gem in the north.", audio:a("Let us find the first gem in the north.ogg")},
-    7:{text:"Let us find another gem in the east.",    audio:a("Let us find another gem in the east.ogg")},
-    8:{text:"Let us find the last gem in the west.",    audio:a("Let us find the last gem in the west.ogg")},
-    9:{text:"Tap North to find the gem.", audio:a("Tap North to find the gem.ogg")},
-    10:{text:"Tap east to find the gem.",audio:a("Tap east to find the gem.ogg")},
-    11:{text:"Tap south to find the gem.",audio:a("Tap south to find the gem.ogg")},
-    12:{text:"Tap west to find the gem.",audio:a("Tap west to find the gem.ogg")},
-    13:{text:"This is North.",audio:a("This is North.ogg")},
-    14:{text:"This is East.", audio:a("This_is_East.ogg")},
-    15:{text:"This is south.",audio:a("This is south.ogg")},
-    16:{text:"This is west.", audio:a("This is west.ogg")},
-    17:{text:"Tap North.",audio:a("Tap North.ogg")},
-    18:{text:"Tap East.", audio:a("TAP EAST .ogg")},
-    19:{text:"Tap South.",audio:a("Tap South.ogg")},
-    20:{text:"Tap west.", audio:a("Tap west.ogg")},
-    21:{text:"One more step. Tap North.",           audio:a("ONE MORE STEP TAP NORTH.ogg")},
-    22:{text:"Two more steps to go. Tap east again.",audio:a("Two more steps to go Tap east again .ogg")},
-    23:{text:"Great! One step more. Tap east.",     audio:a("Great One step more tap east.ogg")},
-    24:{text:"One more step. Tap South.",           audio:a("ONE MORE STEP TAP SOUTH.ogg")},
-    25:{text:"Two more steps to go. Tap west again.",audio:a("Two more steps to go Tap west again .ogg")},
-    26:{text:"One step more. Tap west.",            audio:a("One step more tap west.ogg")},
-    27:{text:"Gem found.", audio:a("Gem found.ogg")},
-    28:{text:"That is not north.",audio:a("that is not north.ogg")},
-    29:{text:"That is not East.", audio:a("That is not East.ogg")},
-    30:{text:"That is not south.",audio:a("that is not south.ogg")},
-    31:{text:"That is not west.", audio:a("that is not west.ogg")},
-    32:{text:"Oops! Try again.",  audio:a("Oops Try again.ogg")},
-    40:{text:"Hurry ! We did it.",audio:a("Hooray We did it.ogg")},
-  };
-}
 function repoLBD3() {
   const a = n => AUD('lbd3', n);
   return {
@@ -1097,96 +1116,6 @@ const GOLD = 'rgba(255,184,0,0.85)';
 
 /* ---- per-level configuration (with exact 1920x1080 layout rects) ---------- */
 const LEVELS = {
-  lbd1: {
-    id:'lbd1', title:'Up · Down · Left · Right', type:'player',
-    grid:{cols:7, rows:5}, hasTutorial:true, zoomScale:6, collectionOffsetX:145,
-    img:{
-      bg:COMMON('background.webp'),
-      base:IMG('lbd1','Map Background.webp'),
-      character:COMMON('ship.webp'),
-      glow:IMG('lbd1','Glow.webp'),
-      arrow:IMG('lbd1','Arrow direction.webp'),
-      chatbox:COMMON('chatbox.webp'),
-      final:COMMON('final.webp'),
-      splash:IMG('lbd1','image (14) 1.webp'),
-      goButton:COMMON('go-button.webp'),
-      compass:null,
-      btnUp:IMG('lbd1','Up.webp'), btnDown:IMG('lbd1','Down.webp'),
-      btnLeft:IMG('lbd1','Left.webp'), btnRight:IMG('lbd1','Right.webp'),
-    },
-    layout:{
-      base:{l:119,t:116,w:1704,h:921},
-      field:{l:286,t:198,w:1048,h:748},
-      chat:{l:93,t:12,w:1734,h:178},
-      compass:null,
-      buttons:{ up:{l:1467,t:398,w:123,h:122}, down:{l:1466,t:576,w:124,h:112}, left:{l:1355,t:483,w:125,h:115}, right:{l:1583,t:484,w:125,h:112} },
-    },
-    items:[
-      {direction:'Top',   colOffset:0,  rowOffset:2, offsetX:-12, offsetY:-15, color:GOLD, sprite:IMG('lbd1','Item_1.webp'), w:113, h:106},
-      {direction:'Right', colOffset:3,  rowOffset:0, offsetX:-4,  offsetY:-12, color:GOLD, sprite:IMG('lbd1','Item_2.webp'), w:150, h:150},
-      {direction:'Bottom',colOffset:0,  rowOffset:-2,offsetX:-10, offsetY:-15, color:GOLD, sprite:IMG('lbd1','Item_3.webp'), w:104, h:88},
-      {direction:'Left',  colOffset:-3, rowOffset:0, offsetX:20,  offsetY:20.7,color:GOLD, sprite:IMG('lbd1','Item_4.webp'), w:141, h:146},
-    ],
-    winBanner:COMMON('win-banner.webp'),
-    finalCollage:[
-      {sprite:IMG('lbd1','Image Group.webp'),    l:782,t:241,w:339,h:310},
-      {sprite:IMG('lbd1','Group 160.webp'),      l:598,t:435,w:335,h:307},
-      {sprite:IMG('lbd1','Group 158.webp'),      l:986,t:435,w:336,h:309},
-      {sprite:IMG('lbd1','Group 48096875.webp'), l:841,t:652,w:221,h:152},
-    ],
-    repo:repoLBD1(),
-    tutorialClips:['This is up.ogg','This is down.ogg','This is right.ogg','This is left.ogg'].map(n=>AUD('lbd1',n)),
-    tutorial:{
-      guide:IMG('tutorial','l1-guide.webp'),
-      hl:{ up:IMG('tutorial','l1-hl-up.webp'), down:IMG('tutorial','l1-hl-down.webp'), left:IMG('tutorial','l1-hl-left.webp'), right:IMG('tutorial','l1-hl-right.webp') },
-      pos:{ up:{l:824,t:205,w:248,h:247}, down:{l:827,t:597,w:239,h:214}, left:{l:589,t:394,w:240,h:222}, right:{l:1066,t:396,w:243,h:219} },
-    },
-  },
-  lbd2: {
-    id:'lbd2', title:'North · South · East · West', type:'player',
-    grid:{cols:7, rows:5}, hasTutorial:true, zoomScale:6, collectionOffsetX:145,
-    img:{
-      bg:COMMON('background.webp'),
-      base:IMG('lbd2','Map Background.webp'),
-      character:COMMON('ship.webp'),
-      glow:IMG('lbd1','Glow.webp'),
-      arrow:IMG('lbd1','Arrow direction.webp'),
-      chatbox:COMMON('chatbox.webp'),
-      final:COMMON('final.webp'),
-      splash:IMG('lbd2','Game Start_2.webp'),
-      goButton:COMMON('go-button.webp'),
-      compass:COMMON('compass-g2.webp'),
-      btnUp:COMMON('btn-up.webp'), btnDown:COMMON('btn-down.webp'),
-      btnLeft:COMMON('btn-left.webp'), btnRight:COMMON('btn-right.webp'),
-    },
-    layout:{
-      base:{l:68,t:135,w:1784,h:913},
-      field:{l:190,t:199,w:1051,h:749},
-      chat:{l:93,t:12,w:1734,h:178},
-      compass:{l:1396,t:460,w:219,h:219},
-      buttons:{ up:{l:1422,t:309,w:156,h:147}, down:{l:1436,t:684,w:149,h:138}, left:{l:1237,t:481,w:163,h:176}, right:{l:1612,t:493,w:157,h:152} },
-    },
-    items:[
-      {direction:'Top',   colOffset:0,  rowOffset:2, offsetX:-8,  offsetY:0,  color:'rgba(200,120,255,0.9)', sprite:IMG('lbd2','Item_1.webp'), w:100, h:84},
-      {direction:'Right', colOffset:3,  rowOffset:0, offsetX:-10, offsetY:10, color:'rgba(90,170,255,0.9)',  sprite:IMG('lbd2','Item_2.webp'), w:66,  h:90},
-      {direction:'Bottom',colOffset:0,  rowOffset:-2,offsetX:0,  offsetY:10, color:'rgba(255,80,90,0.9)',   sprite:IMG('lbd2','Item_3.webp'), w:70,  h:95},
-      {direction:'Left',  colOffset:-3, rowOffset:0, offsetX:0, offsetY:0, color:GOLD,                    sprite:IMG('lbd2','Item_4.webp'), w:96,  h:72},
-    ],
-    winBanner:COMMON('win-banner.webp'),
-    finalCollage:[
-      {sprite:IMG('lbd2','Image Group-2.webp'),l:799,t:260,w:339,h:310},
-      {sprite:IMG('lbd2','Image Group.webp'),  l:598,t:435,w:335,h:307},
-      {sprite:IMG('lbd2','Image Group-1.webp'),l:976,t:422,w:336,h:309},
-      {sprite:IMG('lbd2','Group 158.webp'),    l:781,t:581,w:342,h:312},
-    ],
-    repo:repoLBD2(),
-    tutorialClips:['This is North.ogg','This is south.ogg','This_is_East.ogg','This is west.ogg'].map(n=>AUD('lbd2',n)),
-    tutorial:{
-      guide:IMG('tutorial','l2-guide.webp'),
-      hl:{ up:IMG('tutorial','l2-hl-up.webp'), down:IMG('tutorial','l2-hl-down.webp'), left:IMG('tutorial','l2-hl-left.webp'), right:IMG('tutorial','l2-hl-right.webp') },
-      pos:{ up:{l:758,t:124,w:263,h:247}, down:{l:762,t:724,w:247,h:228}, left:{l:409,t:385,w:284,h:306}, right:{l:1099,t:412,w:261,h:252} },
-    },
-  },
   lbd3: {
     id:'lbd3', title:'Guide the Ship to the Island', type:'ship',
     grid:{cols:7, rows:5}, hasTutorial:false, zoomScale:4, collectionOffsetX:250,
@@ -1202,11 +1131,7 @@ const LEVELS = {
       bg:IMG('lbd3','Blue water image  bg  LBD3.webp'),
       base:IMG('lbd3','MAP Background Group.webp'),   // parchment + ocean + island + rocks + right panel
       character:COMMON('ship.webp'),
-      glow:IMG('lbd1','Glow.webp'),
-      arrow:IMG('lbd1','Arrow direction.webp'),   // idle hint = chevrons (points next BFS step)
-      aerrow:IMG('lbd3','Arrow image.webp'),      // separate wooden goal-marker above the island
       chatbox:COMMON('chatbox.webp'),
-      final:IMG('lbd3','Last screen2.webp'),
       splash:IMG('lbd3','Game Start Page.webp'),
       goButton:COMMON('go-button.webp'),
       compass:COMMON('compass-g3.webp'),
@@ -1523,20 +1448,52 @@ class Level {
     const s = document.createElement('div');
     s.className = 'overlay splash';
     s.style.backgroundImage = `url("${cfg.img.splash}")`;
+
+    // Start button — hidden until every asset is fetched (revealed with a pop-in).
     const go = document.createElement('button');
     go.className = 'go-btn';
+    go.style.display = 'none';
     if (cfg.img.goButton) go.style.backgroundImage = `url("${cfg.img.goButton}")`; else go.textContent = "Let's Go!";
     s.appendChild(go);
+
+    // Themed loading bar occupying the start button's spot until 100% loaded.
+    const load = document.createElement('div');
+    load.className = 'load-wrap';
+    const track = document.createElement('div'); track.className = 'load-track';
+    const fill = document.createElement('div');  fill.className = 'load-fill';
+    const pct  = document.createElement('div');   pct.className = 'load-pct'; pct.textContent = 'Loading… 0%';
+    track.appendChild(fill); load.appendChild(track); load.appendChild(pct);
+    s.appendChild(load);
+
     this.stage.appendChild(s);
     this.splashEl = s;
-    const gtf = E.initTransform(go);
-    gtf.baseCenter = false;   // positioned by rect, not grid-centered
-    gtf.scale = 0.8;          // SplashController: DOScale(1).From(0.8) yoyo
-    E.applyTransform(go);
-    E.doScale(go, 1.0, 1.0, E.Ease.InOutSine).setLoops(-1, 'yoyo');
+    this.goBtn = go; this.loadWrap = load; this.loadFill = fill; this.loadPct = pct;
+    this._assetsReady = false;
+
     go.onclick = () => this.onGoClicked();
   }
+  setLoadProgress(pct) {
+    pct = Math.max(0, Math.min(100, pct | 0));
+    if (this.loadFill) this.loadFill.style.width = pct + '%';
+    if (this.loadPct)  this.loadPct.textContent = 'Loading… ' + pct + '%';
+  }
+  onAssetsReady() {
+    if (this._assetsReady) return;
+    this._assetsReady = true;
+    if (this.loadWrap) this.loadWrap.style.display = 'none';
+    const go = this.goBtn;
+    if (!go) return;
+    go.style.display = '';
+    const gtf = E.initTransform(go);
+    gtf.baseCenter = false;   // positioned by rect, not grid-centered
+    gtf.scale = 0.8;          // pop-in, then the SplashController breathing yoyo
+    E.applyTransform(go);
+    E.doScale(go, 1.0, 0.35, E.Ease.OutBack, () => {
+      E.doScale(go, 1.0, 1.0, E.Ease.InOutSine).setLoops(-1, 'yoyo');
+    });
+  }
   onGoClicked() {
+    if (!this._assetsReady) return;   // guard: keyboard/programmatic starts wait for assets too
     this.audio.playButtonClick();
     this.audio.playBackgroundMusic();
     E.doFade(this.splashEl, 0, 0.8, () => {
@@ -1734,40 +1691,32 @@ class Level {
    BOOTSTRAP — level-select menu + launcher
 ============================================================================= */
 function boot() {
-  const menu = document.getElementById('menu');
   const gameRoot = document.getElementById('game-root');
   const audio = new E.AudioManager();
-  // Real audio (from AllVOs): looping background music + dedicated SFX.
-  // (source AudioManager: PlayLossSound == the collect sound.)
+  // Looping background music + dedicated SFX. Audio is Ogg/Opus
+  // (Chrome/Edge/Firefox + Safari 15+/iOS 15+). PlayLossSound == the collect sound.
   const AC = (n) => `assets/audio/common/${encodeURIComponent(n)}`;
   audio.setClips({
-    bg:   AC('background-music.mp3'),
-    win:  AC('win.mp3'),        // prize screen
-    loss: AC('collect.mp3'),    // collect
-    click:AC('click.mp3'),      // ship movement / button tap
+    bg:   AC('background-music.ogg'),
+    win:  AC('win.ogg'),        // prize screen
+    loss: AC('collect.ogg'),    // collect
+    click:AC('click.ogg'),      // ship movement / button tap
   });
 
-  let current = null;
-  const showMenu = () => {
-    if (current) { gameRoot.innerHTML = ''; current = null; }
-    menu.style.display = ''; gameRoot.style.display = 'none';
-  };
-  const launch = (id) => {
-    menu.style.display = 'none'; gameRoot.style.display = '';
-    current = new Level(LEVELS[id], gameRoot, { audio, onExit: showMenu });
-  };
+  // Single-level deploy (window.LBD_LEVEL is set by index.html).
+  const levelId = (window.LBD_LEVEL && LEVELS[window.LBD_LEVEL]) ? window.LBD_LEVEL : 'lbd3';
+  gameRoot.style.display = '';
+  const current = new Level(LEVELS[levelId], gameRoot, { audio, onExit: () => location.reload() });
 
-  document.querySelectorAll('[data-level]').forEach(card => card.addEventListener('click', () => launch(card.dataset.level)));
-
-  // Single-level deploy: if window.LBD_LEVEL is set (by that level's index.html),
-  // launch it directly with no menu. Otherwise show the level-select menu.
-  if (window.LBD_LEVEL && LEVELS[window.LBD_LEVEL]) {
-    if (menu) menu.style.display = 'none';
-    gameRoot.style.display = '';
-    current = new Level(LEVELS[window.LBD_LEVEL], gameRoot, { audio, onExit: () => location.reload() });
-  } else {
-    showMenu();
-  }
+  // Preload every asset behind the loading bar before revealing the start button.
+  const manifest = window.ASSET_MANIFEST || [];
+  const pre = new E.Preloader(manifest).onProgress((pct) => current.setLoadProgress(pct));
+  const finish = () => current.onAssetsReady();
+  // Watchdog: the button MUST become reachable even if preloading hangs/never resolves.
+  const watchdog = setTimeout(finish, 30000);
+  const done = () => { clearTimeout(watchdog); finish(); };
+  if (manifest.length) pre.run().then(done).catch(done);
+  else done();   // no manifest -> don't trap the user behind an empty bar
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
