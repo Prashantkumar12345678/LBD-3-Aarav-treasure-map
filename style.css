@@ -89,6 +89,12 @@ button { font-family: inherit; }
 .dbtn:hover { transform: scale(1.05); }
 .dbtn:active { transform: scale(.9); }
 .buttons-off .dbtn { pointer-events: none; filter: grayscale(.95) brightness(.8) opacity(.5); }
+/* Idle nudge: the four direction buttons breathe (no arrow, no voice-over). */
+.dbtn.idle-breathe { animation: btn-breathe 1.35s ease-in-out infinite; }
+@keyframes btn-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.07); } }
+/* One-shot double pulse when the "Tap the buttons to move the ship." line appears. */
+.dbtn.tap-pulse { animation: btn-tap-pulse 1.3s ease-in-out; }
+@keyframes btn-tap-pulse { 0%, 50%, 100% { transform: scale(1); } 25%, 75% { transform: scale(1.13); } }
 
 /* ---------- Feedback / hints ---------- */
 /* Wrong-move: red tint over the cell the character landed on (~one grid cell). */
@@ -150,11 +156,18 @@ button { font-family: inherit; }
    art is still downloading on a slow connection; the art covers it once loaded). */
 .splash { background-color: #0e2b40; }
 .splash .go-btn {
-  position: absolute; left: 1448px; top: 754px; width: 472px; height: 325px;
+  position: absolute; left: 1579px; top: 792px; width: 210px; height: 210px;
   border: none; cursor: pointer; background: transparent;
   background-size: contain; background-repeat: no-repeat; background-position: center;
-  color: #fff; font-size: 48px;
+  filter: drop-shadow(0 0 14px rgba(120,215,255,.9)) drop-shadow(0 0 34px rgba(60,170,235,.6));
+  animation: goglow 2.2s ease-in-out infinite;
 }
+@keyframes goglow {
+  0%, 100% { filter: drop-shadow(0 0 10px rgba(120,215,255,.7)) drop-shadow(0 0 24px rgba(60,170,235,.45)); }
+  50%      { filter: drop-shadow(0 0 20px rgba(150,230,255,1))  drop-shadow(0 0 46px rgba(60,170,235,.8)); }
+}
+.go-btn.is-ready { animation: gopop .45s cubic-bezier(.2,1.6,.45,1); }
+@keyframes gopop { from { transform: scale(.55); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 /* Themed loading bar shown in the start button's place until assets finish. */
 .splash .load-wrap {
   position: absolute; left: 1454px; top: 866px; width: 460px;

@@ -1,0 +1,24 @@
+<svg width="540" height="540" viewBox="0 0 540 540" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="270" cy="270" r="264.5" fill="url(#paint0_linear_1842_825)" stroke="#0880CB" stroke-width="11"/>
+<circle cx="270" cy="270" r="245" fill="url(#paint1_radial_1842_825)"/>
+<path d="M377.42 239.778C382.903 242.694 387.49 247.047 390.688 252.371C393.887 257.694 395.576 263.788 395.576 269.998C395.576 276.209 393.887 282.302 390.688 287.626C387.49 292.949 382.903 297.302 377.42 300.218L231.149 379.758C207.597 392.579 178.667 375.911 178.667 349.55V190.458C178.667 164.086 207.597 147.429 231.149 160.227L377.42 239.778Z" fill="url(#paint2_linear_1842_825)"/>
+<defs>
+<linearGradient id="paint0_linear_1842_825" x1="270" y1="0" x2="270" y2="540" gradientUnits="userSpaceOnUse">
+<stop stop-color="white"/>
+<stop offset="1" stop-color="#999999"/>
+</linearGradient>
+<radialGradient id="paint1_radial_1842_825" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(270 270) rotate(90) scale(245)">
+<stop stop-color="#2AA1E5"/>
+<stop offset="0.5" stop-color="#158DD5"/>
+<stop offset="1" stop-color="#0079C5"/>
+</radialGradient>
+<!-- The ▶ : brightened on request. Was white -> #C5C5C4, which read as grey against
+     the blue disc; now white -> #F8F8F8, so it stays near-pure white with only a
+     whisper of shading left to keep the shape from going flat.
+     A pristine copy of this file is at assets/_originals/Play button.svg. -->
+<linearGradient id="paint2_linear_1842_825" x1="198" y1="165" x2="303" y2="347" gradientUnits="userSpaceOnUse">
+<stop stop-color="white"/>
+<stop offset="1" stop-color="#F8F8F8"/>
+</linearGradient>
+</defs>
+</svg>

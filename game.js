@@ -202,6 +202,7 @@ class AudioManager {
   playButtonClick() { this._oneShot(this.sfx.click); }
   playWinSound()    { this._oneShot(this.sfx.win); }
   playLossSound()   { this._oneShot(this.sfx.loss); }   // == collect sound
+  playChime()       { this._oneShot(this.sfx.loss); }   // collect.ogg "ching" — used for ship/island pulses
   toggleMute() {
     this.isMuted = !this.isMuted;
     this.bg.muted = this.isMuted;
@@ -311,7 +312,77 @@ class ChatManager {
       waitVoice();
     });
   }
+  // Typewriter that fires per-word cues as each word is fully revealed, optionally
+  // holding (voice + typing paused together, so they stay in sync) for a beat so a
+  // matching sprite can pulse. Used by the scripted intro ("...the SHIP...ISLAND.").
+  playChatCued(index, cues, onComplete) {
+    const item = this.repository[index];
+    if (!item) { if (onComplete) onComplete(); return; }
+    this.stopAllActiveChat(true);
+    const text = item.text || '';
+    const lower = text.toLowerCase();
+    const marks = (cues || []).map((c) => {
+      const at = lower.indexOf(c.word.toLowerCase());
+      return at < 0 ? null : { end: at + c.word.length, fn: c.fn, pause: c.pause || 0, fired: false };
+    }).filter(Boolean).sort((a, b) => a.end - b.end);
+
+    this.box.textContent = '';
+    this._cuedActive = true;
+    let n = 0;
+    // Pace the reveal to the VOICE (perChar = audioDuration / textLength) so a cue
+    // fires when the word is actually spoken — not early (typewriter default is faster).
+    const run = (perChar) => {
+      if (!this._cuedActive) return;
+      const advance = () => {
+        if (!this._cuedActive) return;
+        if (n >= text.length) { this._cuedActive = false; if (onComplete) delayedCall(0.15, onComplete); return; }
+        n++;
+        delayedCall(perChar, step);
+      };
+      const step = () => {
+        if (!this._cuedActive) return;
+        this.box.textContent = text.substring(0, n);
+        const cue = marks.find((m) => !m.fired && m.end <= n);
+        if (cue) {
+          cue.fired = true;
+          if (item.audio) this.voice.pause();        // hold voice + typing together for the beat
+          const resume = () => {                     // called when the cue's pulses finish
+            if (!this._cuedActive) return;
+            if (item.audio) this.voice.play().catch(() => {});
+            delayedCall(cue.pause || 0, advance);
+          };
+          if (cue.fn) cue.fn(resume); else resume();
+          return;
+        }
+        advance();
+      };
+      step();
+    };
+    if (item.audio) {
+      this.voice.pause();
+      setMediaSrc(this.voice, item.audio);
+      this.voice.muted = this.audioMgr ? this.audioMgr.isMuted : false;
+      let started = false;
+      const begin = () => {
+        if (started || !this._cuedActive) return; started = true;
+        const d = this.voice.duration;
+        const perChar = (isFinite(d) && d > 0) ? Math.max(d / text.length, 0.03) : this.typingSpeed;
+        this.voice.play().catch(() => {});
+        run(perChar);
+      };
+      if (isFinite(this.voice.duration) && this.voice.duration > 0) begin();
+      else {
+        const onMeta = () => { this.voice.removeEventListener('loadedmetadata', onMeta); begin(); };
+        this.voice.addEventListener('loadedmetadata', onMeta);
+        this.voice.load();
+        delayedCall(0.5, begin);                     // fallback if metadata never arrives
+      }
+    } else {
+      run(this.typingSpeed);
+    }
+  }
   stopAllActiveChat(clearText = true) {
+    this._cuedActive = false;
     if (this._typingTween) this._typingTween.kill();
     if (this._voiceWaiter) cancelAnimationFrame(this._voiceWaiter);
     this.voice.pause();
@@ -696,33 +767,88 @@ class ShipController {
     if (c.handEl) c.handEl.style.display = 'none';
     if (c.arrowEl) c.arrowEl.style.display = 'none';
   }
-  start() { this.chat.playChat(0, false, 0, 0, () => this.chat.playChat(1, false)); }
+  start() {
+    this.resetIdleTimer();   // idle clock starts when gameplay begins, not at build time
+    // Intro instruction, synced to the voice: the pause lands ON "ship" (the reveal is
+    // paced to the audio), the ship glows + pulses TWICE with a sound; then on "island"
+    // the treasure pulses TWICE with a sound. Buttons stay locked until "Tap the buttons".
+    const cues = [
+      { word: 'ship',   pause: 0.15, fn: (done) => this._emphasizeShip(done) },
+      { word: 'island', pause: 0.15, fn: (done) => this._pulseTarget(done) },
+    ];
+    this.chat.playChatCued(0, cues, () => {
+      // Buttons stay locked WHILE "Tap the buttons to move the ship." plays; only once
+      // that line finishes do they become active AND pulse (with sound) — not before.
+      this.chat.playChat(1, false, 0, 0, () => {
+        this.ctx.setButtonsEnabled(true);
+        this._pulseButtons();
+        delayedCall(1.5, () => this.resetIdleTimer());   // idle countdown starts only after the pulse
+      });
+    });
+  }
+  // Gentle one-shot double-pulse of the four direction buttons, a sound per pulse.
+  _pulseButtons() {
+    const btns = this.ctx.dpadButtons && this.ctx.dpadButtons();
+    if (!btns) return;
+    for (const k in btns) { if (btns[k]) { btns[k].classList.remove('tap-pulse'); void btns[k].offsetWidth; btns[k].classList.add('tap-pulse'); } }
+    if (this.ctx.audio) this.ctx.audio.playButtonClick();                 // sound on pulse 1
+    delayedCall(0.65, () => { if (this.ctx.audio) this.ctx.audio.playButtonClick(); });   // sound on pulse 2
+    delayedCall(1.4, () => { for (const k in btns) btns[k] && btns[k].classList.remove('tap-pulse'); });
+  }
+  // Two pulses, each kicked off with a sound; `cb` fires when both finish.
+  _pulseTwice(el, cb) {
+    if (!el || el.style.display === 'none') { if (cb) cb(); return; }
+    const base = (initTransform(el).scale) || 1;
+    const onePulse = (done) => {
+      if (this.ctx.audio) this.ctx.audio.playChime();          // collect.ogg "ching" per pulse
+      doScale(el, base * 1.24, 0.42, Ease.InOutSine, () =>    // gentle, unhurried swell
+        doScale(el, base, 0.40, Ease.InOutSine, done));
+    };
+    onePulse(() => onePulse(cb));
+  }
+  _emphasizeShip(cb) {
+    this.ctx.showCharGlow(true);               // green halo behind the ship on the word "ship"
+    this._pulseTwice(this.el, () => { this.ctx.showCharGlow(false); if (cb) cb(); });
+  }
+  _pulseTarget(cb) {
+    // The island's treasure is a real sprite on the target cell (the island itself is
+    // painted into the map), so pulse the treasure chest twice with a sound.
+    const treasure = this.itemManager && this.itemManager.getCurrentItemObject();
+    this._pulseTwice(treasure, cb);
+  }
   onNewItem() { this.resetIdleTimer(); }
 
   _idleLoop() {
     const loop = () => {
-      if (now() - this.lastInteractionTime > this.idleTimeThreshold) {
-        if (!this._hintOn) this.showHint(this.incorrectCount >= 0);
-      }
+      const idle = (now() - this.lastInteractionTime) > this.idleTimeThreshold;
+      // Input-locked = mid-move / recovery / collect / tutorial / win. The idle clock
+      // keeps running through those (blocked presses never refresh lastInteractionTime),
+      // but the breathe is suppressed until input is free again.
+      const locked = this.isMoving || (this.ctx.buttonsEnabled && this.ctx.buttonsEnabled() === false);
+      if (idle && !locked) this._startIdleBreathe(); else this._stopIdleBreathe();
       this._raf = requestAnimationFrame(loop);
     };
     this._raf = requestAnimationFrame(loop);
   }
-  showHint(showHand) {
-    const c = this.ctx;
-    this._hintOn = true;
-    c.showCharGlow(true);
-    if (!this.isWinMove && now() - this.lastInteractionTime > this.idleTimeThreshold) this.chat.playChat(4, false);
-    this.updateHint();                                    // shows a chevron on every valid direction
-    // (ship hint uses direction arrows only — no hand nudge)
-    this.showArrowTemporarily();
+  _startIdleBreathe() {
+    if (this._idleBreathing) return;
+    this._idleBreathing = true;
+    const btns = this.ctx.dpadButtons && this.ctx.dpadButtons();
+    if (btns) for (const k in btns) btns[k] && btns[k].classList.add('idle-breathe');
+  }
+  _stopIdleBreathe() {
+    if (!this._idleBreathing) return;
+    this._idleBreathing = false;
+    const btns = this.ctx.dpadButtons && this.ctx.dpadButtons();
+    if (btns) for (const k in btns) btns[k] && btns[k].classList.remove('idle-breathe');
   }
   resetIdleTimer() {
     this.lastInteractionTime = now();
     this._hintOn = false;
+    this._stopIdleBreathe();                              // any press stops the idle breathe
     if (this.ctx.idleEl) this.ctx.idleEl.style.display = 'none';
     this._dirArrowsHide();
-    if (this.ctx.handEl) { if (this.ctx.handEl.style.display !== 'none') this.incorrectCount = 0; this.ctx.handEl.style.display = 'none'; }
+    if (this.ctx.handEl) this.ctx.handEl.style.display = 'none';   // streak resets only on a correct move
     this.ctx.showCharGlow(false);
   }
   moveUp()    { this.handleMove(0, 1); }
@@ -765,19 +891,32 @@ class ShipController {
         if (c.tryAgainEl) c.tryAgainEl.style.display = '';   // wooden Try Again sign
         this.chat.playChat(3, false, 0, 0, next);            // "Try again" voice
       },
-      // 3) back to "Tap the buttons to move the ship." (+ direction arrows on 2nd wrong)
+      // 3) back to "Tap the buttons to move the ship." Escalating help by streak:
+      //    1st wrong = instruction only; 2nd = + goal-ward arrows; 3rd+ = + hand on the correct button.
       (next) => {
         if (c.tryAgainEl) c.tryAgainEl.style.display = 'none';
         if (c.idleEl) c.idleEl.style.display = 'none';
         this._dirArrowsHide();
+        if (c.handEl) c.handEl.style.display = 'none';
         this.isMoving = false;
-        if (this.incorrectCount >= 2) {                       // arrows only after 2 consecutive wrong moves
+        if (this.incorrectCount >= 2) {                       // 2nd consecutive wrong: arrows toward the goal
           this.ctx.showCharGlow(true);
           this.updateHint();                                  // chevron in the correct (goal-ward) direction(s)
         }
-        this.chat.playChat(1, false);                         // "Tap the buttons to move the ship." (always stays on screen)
+        if (this.incorrectCount >= 3) this._showHandOnCorrectButton();   // 3rd+: also nudge the correct button
+        this.chat.playChat(1, false);                         // same instruction in every case
       },
     ]);
+  }
+  // Hand nudge over the correct (goal-ward) direction button. buttonOrder for the
+  // ship is [up, down, left, right] -> indices 0..3.
+  _showHandOnCorrectButton() {
+    const dir = (this.getProgressDirs() || [])[0];
+    if (!dir || !this.ctx.handEl || !this.ctx.positionHandOverButton) return;
+    const bi = { up: 0, down: 1, left: 2, right: 3 }[dir];
+    if (bi === undefined) return;
+    this.ctx.positionHandOverButton(bi);
+    this.ctx.handEl.style.display = '';
   }
   isObstacle(col, row) { return this.stonePositions.some(s => s.x === col && s.y === row); }
   _moveTo(target, isWin) {
@@ -876,14 +1015,6 @@ class ShipController {
     this.isMoving = false;
     this.ctx.setButtonsEnabled(true);
     this.resetIdleTimer();
-  }
-  showArrowTemporarily() {
-    const c = this.ctx;
-    if (c.arrowEl) {
-      c.arrowEl.style.display = '';
-      if (this._arrowTween) this._arrowTween.kill();
-      this._arrowTween = delayedCall(10, () => { if (c.arrowEl) c.arrowEl.style.display = 'none'; });
-    }
   }
 }
 
@@ -1133,7 +1264,7 @@ const LEVELS = {
       character:COMMON('ship.webp'),
       chatbox:COMMON('chatbox.webp'),
       splash:IMG('lbd3','Game Start Page.webp'),
-      goButton:COMMON('go-button.webp'),
+      goButton:COMMON('Play button.svg'),
       compass:COMMON('compass-g3.webp'),
       island:IMG('lbd3','Top Island image 1.webp'),
       obstacle:IMG('lbd3','Rock obstacles.webp'),
@@ -1147,7 +1278,7 @@ const LEVELS = {
       compass:{l:1396,t:460,w:215,h:215},
       buttons:{ up:{l:1423,t:310,w:156,h:147}, down:{l:1436,t:683,w:149,h:138}, left:{l:1238,t:480,w:163,h:176}, right:{l:1611,t:492,w:157,h:152} },
     },
-    items:[ {direction:'Top', colOffset:0, rowOffset:2, offsetX:0, offsetY:0, color:GOLD,
+    items:[ {direction:'Top', colOffset:0, rowOffset:2, offsetX:0, offsetY:-16, color:GOLD,   // treasure nudged 16px down
              sprite:IMG('lbd3','Teasure image 1.webp'), w:150, h:118,
              collectBg:IMG('lbd3','Top Island image 1.webp') } ],  // collect screen: whole island + chest
     island:IMG('lbd3','Top Island image 1.webp'),
@@ -1373,6 +1504,8 @@ class Level {
       characterEl: this.characterEl, idleEl: this.idleEl, incorrectEl: this.incorrectEl,
       tryAgainEl: this.tryAgainEl, handEl: this.handEl, arrowEl: this.arrowEl, dirArrows: this.dirArrows,
       assetImg: (n) => n, controller: null, itemManager: null,
+      dpadButtons: () => self.btn,                       // the four direction buttons (idle breathe)
+      buttonsEnabled: () => self._buttonsEnabled,        // input-lock state (collect/tutorial/win)
       setButtonsEnabled: (on) => { self._buttonsEnabled = on; self.stage.classList.toggle('buttons-off', !on); },
       positionHandOverButton: (index) => {
         if (index < 0 || !self.buttonOrder || index >= self.buttonOrder.length) return;
@@ -1484,16 +1617,19 @@ class Level {
     const go = this.goBtn;
     if (!go) return;
     go.style.display = '';
-    const gtf = E.initTransform(go);
-    gtf.baseCenter = false;   // positioned by rect, not grid-centered
-    gtf.scale = 0.8;          // pop-in, then the SplashController breathing yoyo
-    E.applyTransform(go);
-    E.doScale(go, 1.0, 0.35, E.Ease.OutBack, () => {
-      E.doScale(go, 1.0, 1.0, E.Ease.InOutSine).setLoops(-1, 'yoyo');
+    go.classList.add('is-ready');
+    E.delayedCall(0.5, () => {                  // wait out the pop-in: both use `transform`
+      go.classList.remove('is-ready');
+      const gtf = E.initTransform(go);
+      gtf.baseCenter = false;
+      gtf.scale = 0.9;
+      E.applyTransform(go);
+      this._goPulse = E.doScale(go, 1.0, 1.0, E.Ease.InOutSine).setLoops(-1, 'yoyo');
     });
   }
   onGoClicked() {
     if (!this._assetsReady) return;   // guard: keyboard/programmatic starts wait for assets too
+    if (this._goPulse) { this._goPulse.kill(); this._goPulse = null; }
     this.audio.playButtonClick();
     this.audio.playBackgroundMusic();
     E.doFade(this.splashEl, 0, 0.8, () => {
@@ -1607,7 +1743,7 @@ class Level {
     this.itemManager._elements.forEach(el => { el.style.display = 'none'; const t = E.initTransform(el); t.scale = 1; E.applyTransform(el); });
 
     this.stage.classList.add('playing');
-    this.setButtonsEnabledPublic(true);
+    this.setButtonsEnabledPublic(false);   // locked during the intro line; unlocked when "Tap the buttons" shows
     this.itemManager.currentItemIndex = 0;
     this.itemManager.activateNextItem();
     if (this.controller.start) this.controller.start();
