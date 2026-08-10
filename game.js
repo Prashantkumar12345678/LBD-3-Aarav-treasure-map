@@ -198,11 +198,12 @@ class AudioManager {
   }
   playBackgroundMusic() { if (this._bgSrc) { setMediaSrc(this.bg, this._bgSrc); this.bg.muted = this.isMuted; this.bg.play().catch(()=>{}); } }
   stopBackgroundMusic() { this.bg.pause(); }
-  _oneShot(src) { if (!src) return; const a = new Audio(); setMediaSrc(a, src); a.muted = this.isMuted; a.play().catch(()=>{}); }
+  _oneShot(src, volume) { if (!src) return; const a = new Audio(); setMediaSrc(a, src); a.muted = this.isMuted; if (typeof volume === 'number') a.volume = volume; a.play().catch(()=>{}); }
   playButtonClick() { this._oneShot(this.sfx.click); }
   playWinSound()    { this._oneShot(this.sfx.win); }
   playLossSound()   { this._oneShot(this.sfx.loss); }   // == collect sound
-  playChime()       { this._oneShot(this.sfx.loss); }   // collect.ogg "ching" — used for ship/island pulses
+  playChime()       { this._oneShot(this.sfx.loss); }   // collect.ogg "ching"
+  playTinkle()      { this._oneShot(this.sfx.loss, 0.4); }   // soft, low-volume tinkle for the ship/island highlight
   toggleMute() {
     this.isMuted = !this.isMuted;
     this.bg.muted = this.isMuted;
@@ -345,17 +346,7 @@ class ChatManager {
         if (!this._cuedActive) return;
         this.box.textContent = text.substring(0, n);
         const cue = marks.find((m) => !m.fired && m.end <= n);
-        if (cue) {
-          cue.fired = true;
-          if (item.audio) this.voice.pause();        // hold voice + typing together for the beat
-          const resume = () => {                     // called when the cue's pulses finish
-            if (!this._cuedActive) return;
-            if (item.audio) this.voice.play().catch(() => {});
-            delayedCall(cue.pause || 0, advance);
-          };
-          if (cue.fn) cue.fn(resume); else resume();
-          return;
-        }
+        if (cue) { cue.fired = true; if (cue.fn) cue.fn(function () {}); }  // highlight only — never break the sentence
         advance();
       };
       step();
@@ -771,12 +762,13 @@ class ShipController {
   }
   start() {
     this.resetIdleTimer();   // idle clock starts when gameplay begins, not at build time
-    // Intro instruction, synced to the voice: the pause lands ON "ship" (the reveal is
-    // paced to the audio), the ship glows + pulses TWICE with a sound; then on "island"
-    // the treasure pulses TWICE with a sound. Buttons stay locked until "Tap the buttons".
+    // Intro instruction, synced to the voice (reveal paced to the audio): the sentence
+    // plays straight through WITHOUT breaking — as "ship" is spoken the ship highlights
+    // (glow + pulse), and as "island" is spoken the treasure highlights. Buttons stay
+    // locked until "Tap the buttons".
     const cues = [
-      { word: 'ship',   pause: 0.15, fn: (done) => this._emphasizeShip(done) },
-      { word: 'island', pause: 0.15, fn: (done) => this._pulseTarget(done) },
+      { word: 'ship',   fn: () => this._emphasizeShip() },
+      { word: 'island', fn: () => this._pulseTarget() },
     ];
     this.chat.playChatCued(0, cues, () => {
       // The moment "Tap the buttons to move the ship." appears, the buttons activate
@@ -809,12 +801,14 @@ class ShipController {
     onePulse(() => onePulse(cb));
   }
   _emphasizeShip(cb) {
+    if (this.ctx.audio) this.ctx.audio.playTinkle();   // soft tinkle on the word "ship"
     this.ctx.showCharGlow(true);               // green halo behind the ship on the word "ship"
     this._pulseTwice(this.el, () => { this.ctx.showCharGlow(false); if (cb) cb(); });
   }
   _pulseTarget(cb) {
     // The island's treasure is a real sprite on the target cell (the island itself is
-    // painted into the map), so pulse the treasure chest twice with a sound.
+    // painted into the map), so pulse the treasure chest with a soft tinkle.
+    if (this.ctx.audio) this.ctx.audio.playTinkle();   // soft tinkle on the word "island"
     const treasure = this.itemManager && this.itemManager.getCurrentItemObject();
     this._pulseTwice(treasure, cb);
   }
