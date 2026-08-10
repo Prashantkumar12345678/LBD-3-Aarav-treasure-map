@@ -1646,9 +1646,24 @@ class Level {
     if (this._goPulse) { this._goPulse.kill(); this._goPulse = null; }
     this.audio.playButtonClick();
     this.audio.playBackgroundMusic();
-    E.doFade(this.splashEl, 0, 0.8, () => {
+    // "Wave wash" transition: water rises over the splash, and once it fully covers the
+    // screen we swap to the game underneath, then the water sweeps up to reveal it.
+    this._playWaveTransition(() => {
       this.splashEl.style.display = 'none';
       if (this.config.hasTutorial) this.startTutorial(); else this.startGameplay();
+    });
+  }
+  _playWaveTransition(onCovered) {
+    const wrap = document.createElement('div'); wrap.className = 'wave-transition';
+    const water = document.createElement('div'); water.className = 'wave-water';
+    wrap.appendChild(water);
+    this.stage.appendChild(wrap);
+    void water.offsetWidth;                                  // flush initial transform before animating
+    water.style.animation = 'wave-cover 0.6s cubic-bezier(.45,0,.2,1) forwards';
+    E.delayedCall(0.6, () => {
+      if (onCovered) onCovered();                            // fully covered -> swap splash → game
+      water.style.animation = 'wave-exit 0.75s cubic-bezier(.6,0,.35,1) forwards';
+      E.delayedCall(0.85, () => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); });
     });
   }
 
