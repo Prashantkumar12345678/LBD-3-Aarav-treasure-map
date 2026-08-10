@@ -236,6 +236,8 @@ class ChatManager {
   }
   setRepository(repo) { this.repository = repo; }
   setMuted(m) { this.voice.muted = m; }
+  // Show text instantly with NO voice-over (used for repeating instructions).
+  showText(text) { this.stopAllActiveChat(true); this.box.textContent = text || ''; }
 
   // PlayChat(index, clearTextOnWait, preDelay, postDelay, onComplete)
   playChat(index, clearTextOnWait = true, preDelay = 0, postDelay = 0, onComplete = null) {
@@ -777,12 +779,12 @@ class ShipController {
       { word: 'island', pause: 0.15, fn: (done) => this._pulseTarget(done) },
     ];
     this.chat.playChatCued(0, cues, () => {
-      // Buttons stay locked WHILE "Tap the buttons to move the ship." plays; only once
-      // that line finishes do they become active AND pulse (with sound) — not before.
+      // The moment "Tap the buttons to move the ship." appears, the buttons activate
+      // AND pulse (with sound) — not after the line finishes.
+      this.ctx.setButtonsEnabled(true);
+      this._pulseButtons();
       this.chat.playChat(1, false, 0, 0, () => {
-        this.ctx.setButtonsEnabled(true);
-        this._pulseButtons();
-        delayedCall(1.5, () => this.resetIdleTimer());   // idle countdown starts only after the pulse
+        delayedCall(1.5, () => this.resetIdleTimer());   // idle countdown starts after the pulse/line
       });
     });
   }
@@ -800,7 +802,7 @@ class ShipController {
     if (!el || el.style.display === 'none') { if (cb) cb(); return; }
     const base = (initTransform(el).scale) || 1;
     const onePulse = (done) => {
-      if (this.ctx.audio) this.ctx.audio.playChime();          // collect.ogg "ching" per pulse
+      // No SFX here — the pulse alone is the emphasis; a chime overlapped/ducked the VO.
       doScale(el, base * 1.24, 0.42, Ease.InOutSine, () =>    // gentle, unhurried swell
         doScale(el, base, 0.40, Ease.InOutSine, done));
     };
@@ -870,43 +872,55 @@ class ShipController {
       return;
     }
     this.incorrectCount = 0;                  // a correct move breaks the consecutive-wrong streak
+    this._stopWrongVO();                      // silence any lingering "wrong / try again" VO
     this.ctx.showCharGlow(false);
     this.currentCol = nextCol; this.currentRow = nextRow;
     const targetPos = this.grid.getCellPosition(this.currentCol, this.currentRow);
     this.isWinMove = (this.currentCol === this.absoluteTarget.x && this.currentRow === this.absoluteTarget.y);
     this._moveTo(targetPos, this.isWinMove);
   }
+  // Wrong attempt: play "Oh no, wrong direction. Try again." as VO ONLY (non-blocking),
+  // keep the on-screen text as the repeating instruction "Tap the buttons to move the
+  // ship." (NOT spoken), and let the player move again immediately (only a brief lock
+  // for the shake). Escalating help by consecutive-wrong streak.
   _triggerMistake() {
-    this.isMoving = true;
     const c = this.ctx;
-    chain([
-      // 1) "Wrong direction." text + VO, red box glows on the ship's cell (wait for VO to finish)
-      (next) => {
-        if (c.incorrectEl) { const ct = initTransform(this.el), it = initTransform(c.incorrectEl); it.x = ct.x; it.y = ct.y; applyTransform(c.incorrectEl); c.incorrectEl.style.display = ''; }
-        this.chat.playChat(2, false, 0, 0, next);            // "Wrong direction." text + VO
-      },
-      // 2) "Try again" voice + wooden Try Again sign on screen (wait for VO to finish)
-      (next) => {
-        if (c.incorrectEl) c.incorrectEl.style.display = 'none';
-        if (c.tryAgainEl) c.tryAgainEl.style.display = '';   // wooden Try Again sign
-        this.chat.playChat(3, false, 0, 0, next);            // "Try again" voice
-      },
-      // 3) back to "Tap the buttons to move the ship." Escalating help by streak:
-      //    1st wrong = instruction only; 2nd = + goal-ward arrows; 3rd+ = + hand on the correct button.
-      (next) => {
-        if (c.tryAgainEl) c.tryAgainEl.style.display = 'none';
-        if (c.idleEl) c.idleEl.style.display = 'none';
-        this._dirArrowsHide();
-        if (c.handEl) c.handEl.style.display = 'none';
-        this.isMoving = false;
-        if (this.incorrectCount >= 2) {                       // 2nd consecutive wrong: arrows toward the goal
-          this.ctx.showCharGlow(true);
-          this.updateHint();                                  // chevron in the correct (goal-ward) direction(s)
-        }
-        if (this.incorrectCount >= 3) this._showHandOnCorrectButton();   // 3rd+: also nudge the correct button
-        this.chat.playChat(1, false);                         // same instruction in every case
-      },
-    ]);
+    this.isMoving = true;                                     // brief lock, just for the shake
+    if (c.incorrectEl) {                                      // wrong-cell marker on the ship's cell
+      const ct = initTransform(this.el), it = initTransform(c.incorrectEl);
+      it.x = ct.x; it.y = ct.y; applyTransform(c.incorrectEl); c.incorrectEl.style.display = '';
+    }
+    this._playWrongVO();                                      // VO only: "Oh no wrong direction. Try again."
+    this.chat.showText('Tap the buttons to move the ship.');  // text only — repeating instruction, no VO
+    // Escalating help: 1st wrong = instruction only; 2nd = + goal-ward arrows; 3rd+ = + hand nudge.
+    if (c.idleEl) c.idleEl.style.display = 'none';
+    this._dirArrowsHide();
+    if (c.handEl) c.handEl.style.display = 'none';
+    if (this.incorrectCount >= 2) { this.ctx.showCharGlow(true); this.updateHint(); }
+    if (this.incorrectCount >= 3) this._showHandOnCorrectButton();
+    delayedCall(0.3, () => {                                  // unlock right after the shake -> play again
+      if (c.incorrectEl) c.incorrectEl.style.display = 'none';
+      this.isMoving = false;
+    });
+  }
+  // "Oh no, wrong direction." then "Try again." — audio only, no on-screen text, and it
+  // never blocks input. A new wrong attempt interrupts any still-playing wrong VO.
+  _stopWrongVO() {
+    if (this._wrongVoice) { try { this._wrongVoice.pause(); } catch (e) {} this._wrongVoice = null; }
+  }
+  _playWrongVO() {
+    this._stopWrongVO();
+    const repo = this.chat.repository || {};
+    const url1 = repo[2] && repo[2].audio, url2 = repo[3] && repo[3].audio;
+    if (!url1) return;
+    const muted = this.ctx.audio ? this.ctx.audio.isMuted : false;
+    const play = (url, onEnd) => {
+      const a = new Audio(); a.muted = muted; setMediaSrc(a, url);
+      if (onEnd) a.addEventListener('ended', onEnd);
+      a.play().catch(() => {});
+      this._wrongVoice = a; return a;
+    };
+    play(url1, () => { if (url2) play(url2); });
   }
   // Hand nudge over the correct (goal-ward) direction button. buttonOrder for the
   // ship is [up, down, left, right] -> indices 0..3.
