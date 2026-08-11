@@ -150,25 +150,47 @@ button { font-family: inherit; }
 }
 @keyframes hlpop { from { transform: scale(.7); } to { transform: scale(1); } }
 
-/* ---------- Play -> game "wave wash" transition ---------- */
-.wave-transition { position: absolute; inset: 0; z-index: 40; overflow: hidden; pointer-events: none; }
-.wave-water {
-  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
-  transform: translateY(112%); will-change: transform;
-  background: linear-gradient(180deg, #2aa1e5 0%, #158dd5 45%, #0b6bb0 100%);
+/* ---------- Play -> game: the ship sails LEFT->RIGHT carrying a blue wave — bow-wave
+   ahead of it, wake behind. The splash->game swap always sits UNDER the opaque middle of
+   the wave, so the screen changes imperceptibly as the wave advances (no visible cut). */
+.wave-transition { position: absolute; inset: 0; z-index: 41; pointer-events: none; overflow: hidden; }
+.wave-band {
+  position: absolute; top: 0; left: 0; width: 1500px; height: 100%;
+  transform: translateX(-50%); will-change: left;
+  background:
+    /* water-surface ripples */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='130'%3E%3Cg fill='none' stroke='%23ffffff'%3E%3Cpath d='M0,26 Q55,14 110,26 T220,26' stroke-opacity='0.14' stroke-width='3'/%3E%3Cpath d='M0,64 Q55,52 110,64 T220,64' stroke-opacity='0.11' stroke-width='2.5'/%3E%3Cpath d='M0,102 Q55,92 110,102 T220,102' stroke-opacity='0.09' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E") repeat,
+    /* LONG wake reaching back toward the left -> broad OPAQUE middle hides the swap -> bow foam -> clear (splash ahead) */
+    linear-gradient(90deg,
+      rgba(21,141,213,0) 0%,
+      rgba(21,141,213,.32) 5%,
+      rgba(25,145,215,.7) 16%,
+      rgba(27,147,216,.9) 30%,
+      rgba(29,150,219,.98) 44%,
+      rgba(29,150,219,.99) 56%,
+      rgba(29,150,219,.97) 68%,
+      rgba(70,175,232,.9) 78%,
+      rgba(255,255,255,.9) 87%,
+      rgba(255,255,255,.45) 93%,
+      rgba(255,255,255,0) 100%);
+  background-size: 220px 130px, auto;
 }
-/* wavy crest sitting on top of the water body */
-.wave-water::before {
-  content: ''; position: absolute; left: 0; bottom: 100%; width: 100%; height: 64px;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='80' viewBox='0 0 240 80' preserveAspectRatio='none'%3E%3Cpath d='M0,80 L0,40 C40,10 80,10 120,40 C160,70 200,70 240,40 L240,80 Z' fill='%232aa1e5'/%3E%3C/svg%3E") repeat-x bottom / 240px 64px;
+.wave-band .ship {
+  position: absolute; left: 82%; top: 50%; width: 300px; height: 300px;
+  transform: translate(-50%, -50%) scaleX(-1);          /* faces RIGHT = its travel direction */
+  background: url("assets/images/common/ship.webp") center / contain no-repeat;
+  filter: drop-shadow(0 12px 18px rgba(0,0,0,.42));
+  animation: wave-ship-bob 1.7s ease-in-out infinite;   /* gentle up-down bob */
 }
-/* wavy trough hanging under the water body (makes the reveal edge wavy too) */
-.wave-water::after {
-  content: ''; position: absolute; left: 0; top: 100%; width: 100%; height: 64px;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='80' viewBox='0 0 240 80' preserveAspectRatio='none'%3E%3Cpath d='M0,0 L240,0 L240,40 C200,70 160,70 120,40 C80,10 40,10 0,40 Z' fill='%230b6bb0'/%3E%3C/svg%3E") repeat-x top / 240px 64px;
+@keyframes wave-ship-bob { 0%, 100% { margin-top: 0; } 50% { margin-top: -13px; } }
+/* the game is revealed while the wave's opaque middle rides over the boundary; the holds
+   at start/end let the wave enter fully from off-left and exit fully off-right. */
+@keyframes wave-wipe {
+  0%, 24%   { -webkit-clip-path: inset(0 0 0 0);    clip-path: inset(0 0 0 0); }
+  76%, 100% { -webkit-clip-path: inset(0 0 0 100%); clip-path: inset(0 0 0 100%); }
 }
-@keyframes wave-cover { from { transform: translateY(112%); } to { transform: translateY(0%); } }
-@keyframes wave-exit  { from { transform: translateY(0%);   } to { transform: translateY(-118%); } }
+/* the wave band starts fully OFF-SCREEN LEFT and sweeps all the way OFF-SCREEN RIGHT */
+@keyframes wave-band-move { from { left: -45%; } to { left: 145%; } }
 
 /* ---------- Overlays: splash + final ---------- */
 .overlay { position: absolute; inset: 0; z-index: 30; background-size: cover; background-position: center; }

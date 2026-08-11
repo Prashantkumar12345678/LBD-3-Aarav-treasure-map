@@ -204,6 +204,30 @@ class AudioManager {
   playLossSound()   { this._oneShot(this.sfx.loss); }   // == collect sound
   playChime()       { this._oneShot(this.sfx.loss); }   // collect.ogg "ching"
   playTinkle()      { this._oneShot(this.sfx.loss, 0.4); }   // soft, low-volume tinkle for the ship/island highlight
+  // Procedural "wave wash" — filtered noise with a swell envelope (no audio asset needed).
+  playWaveWhoosh(duration) {
+    if (this.isMuted) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      const ctx = this._waveCtx || (this._waveCtx = new AC());
+      if (ctx.state === 'suspended') ctx.resume();
+      const dur = duration || 2.6, t0 = ctx.currentTime;
+      const len = Math.floor(ctx.sampleRate * dur), buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;   // white noise (surf)
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(320, t0);
+      lp.frequency.linearRampToValueAtTime(1500, t0 + dur * 0.5);   // wave builds
+      lp.frequency.linearRampToValueAtTime(280, t0 + dur);          // and recedes
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(0.16, t0 + 0.3);
+      g.gain.linearRampToValueAtTime(0.13, t0 + dur * 0.6);
+      g.gain.linearRampToValueAtTime(0.0001, t0 + dur);
+      src.connect(lp); lp.connect(g); g.connect(ctx.destination);
+      src.start(t0); src.stop(t0 + dur);
+    } catch (e) { /* audio synthesis unavailable — silent */ }
+  }
   toggleMute() {
     this.isMuted = !this.isMuted;
     this.bg.muted = this.isMuted;
@@ -771,12 +795,13 @@ class ShipController {
       { word: 'island', fn: () => this._pulseTarget() },
     ];
     this.chat.playChatCued(0, cues, () => {
-      // The moment "Tap the buttons to move the ship." appears, the buttons activate
-      // AND pulse (with sound) — not after the line finishes.
-      this.ctx.setButtonsEnabled(true);
+      // Pulse the buttons as "Tap the buttons to move the ship." appears (visual cue),
+      // but keep them NON-tappable until the line finishes — the child must hear the
+      // instruction first (it teaches vocabulary); tapping early would be a learning loss.
       this._pulseButtons();
       this.chat.playChat(1, false, 0, 0, () => {
-        delayedCall(1.5, () => this.resetIdleTimer());   // idle countdown starts after the pulse/line
+        this.ctx.setButtonsEnabled(true);                // tappable ONLY after the instruction completes
+        delayedCall(1.5, () => this.resetIdleTimer());   // idle countdown starts after that
       });
     });
   }
@@ -1640,24 +1665,29 @@ class Level {
     if (this._goPulse) { this._goPulse.kill(); this._goPulse = null; }
     this.audio.playButtonClick();
     this.audio.playBackgroundMusic();
-    // "Wave wash" transition: water rises over the splash, and once it fully covers the
-    // screen we swap to the game underneath, then the water sweeps up to reveal it.
+    // The ship sails left->right carrying a blue wave; the splash->game swap rides under
+    // the opaque middle of the wave, so the change is imperceptible as it advances.
     this._playWaveTransition(() => {
       this.splashEl.style.display = 'none';
       if (this.config.hasTutorial) this.startTutorial(); else this.startGameplay();
     });
   }
-  _playWaveTransition(onCovered) {
+  _playWaveTransition(onRevealed) {
+    const DUR = 4.0;                                         // slow, unhurried (covers off-left -> off-right)
     const wrap = document.createElement('div'); wrap.className = 'wave-transition';
-    const water = document.createElement('div'); water.className = 'wave-water';
-    wrap.appendChild(water);
+    const band = document.createElement('div'); band.className = 'wave-band';
+    const ship = document.createElement('div'); ship.className = 'ship';
+    band.appendChild(ship); wrap.appendChild(band);
     this.stage.appendChild(wrap);
-    void water.offsetWidth;                                  // flush initial transform before animating
-    water.style.animation = 'wave-cover 0.6s cubic-bezier(.45,0,.2,1) forwards';
-    E.delayedCall(0.6, () => {
-      if (onCovered) onCovered();                            // fully covered -> swap splash → game
-      water.style.animation = 'wave-exit 0.75s cubic-bezier(.6,0,.35,1) forwards';
-      E.delayedCall(0.85, () => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); });
+    if (this.audio && this.audio.playWaveWhoosh) this.audio.playWaveWhoosh(DUR);   // water-wash sound
+    void band.offsetWidth;                                  // flush initial state before animating
+    const ease = 'linear';                                  // constant sail speed so the reveal tracks the wave
+    this.splashEl.style.animation = 'wave-wipe ' + DUR + 's ' + ease + ' forwards';       // splash hidden under the wave
+    band.style.animation = 'wave-band-move ' + DUR + 's ' + ease + ' forwards';           // the wave sweeps across
+    E.delayedCall(DUR - 0.05, () => { if (onRevealed) onRevealed(); });   // fully passed -> swap splash → game
+    E.delayedCall(DUR + 0.25, () => {
+      this.splashEl.style.animation = '';                    // clear the clip so a hidden splash isn't left clipped
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
     });
   }
 
