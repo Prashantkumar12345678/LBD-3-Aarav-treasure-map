@@ -177,7 +177,7 @@ button { font-family: inherit; }
 }
 .wave-band .ship {
   position: absolute; left: 82%; top: 50%; width: 300px; height: 300px;
-  transform: translate(-50%, -50%) scaleX(-1);          /* faces RIGHT = its travel direction */
+  transform: translate(-50%, -50%);                     /* flipped back -> natural face + un-mirrored "Jalpari" */
   background: url("assets/images/common/ship.webp") center / contain no-repeat;
   filter: drop-shadow(0 12px 18px rgba(0,0,0,.42));
   animation: wave-ship-bob 1.7s ease-in-out infinite;   /* gentle up-down bob */
